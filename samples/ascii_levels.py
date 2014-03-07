@@ -10,6 +10,6 @@ def process_audio_data(data):
   print '*'*int(var/1000000)
 
 
-netrecv = AUNetReceive( host='127.0.0.1', port=52800 )
+netrecv = AUNetReceive( host='127.0.0.1', port=52801 )
 netrecv.onrecv( process_audio_data )
 netrecv.listen()

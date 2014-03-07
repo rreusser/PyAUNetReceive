@@ -1,6 +1,6 @@
 # PyAUNetReceive
 
-PyAUNetReceive is a basic library that listens on a socket for output from the AUNetSend Audio Unit plugin. Provide a callback and then do whatever you want with the output!
+PyAUNetReceive is a simple Python client that listens on a socket for output from the AUNetSend Audio Unit plugin. Translation: If you add the AUNetSend plugin to GarageBand or something, you can process the audio in realtime and do with it anything Python can do! Sweet!
 
 # Installation
 
@@ -8,7 +8,9 @@ PyAUNetReceive is a basic library that listens on a socket for output from the A
 
 # Usage
 
-To connect to the output of an AUNetSend plugin, first start a program the uses Audio Unit plugins and then instantiate an AUNetSend plugin. Signed 16-bit PCM output is the only format currently supported. Specify a host and port (default host='127.0.0.1', port=52800) in the Audio Unit view, then in your python program simply write
+To connect to the output of an AUNetSend plugin, first start a program the uses Audio Unit plugins and then instantiate an AUNetSend plugin. Signed 16-bit PCM output is the only format currently supported. Specify a host and port (default host='127.0.0.1', port=52800) in the Audio Unit view.
+
+Then in your Python program simply write
 
 ```python
 from pyaunetreceive import AUNetReceive

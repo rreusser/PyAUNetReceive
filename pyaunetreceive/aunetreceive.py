@@ -13,7 +13,7 @@ class AUNetReceive:
     s.state = s.NEEDSHAKE
     s.data_queue = ''
     s.netrecv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.netrecv.connect(('127.0.0.1',52800))
+    s.netrecv.connect((host,port))
     s.netrecv.setblocking(1)
     s.callback = lambda x: None
     
