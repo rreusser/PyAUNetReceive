@@ -16,6 +16,8 @@ Apple's AU Lab is the simplest way to get started. You can find AU Lab with a qu
 
 2. Find the Effects section of the Output pane and select AUNetSend. Set the data format to '16 bit integer PCM' and the port to 52800.
 
+Other suggested programs are the excellent [http://www.rogueamoeba.com/audiohijack/](Audio Hijack) or Garage Band or really anything that works with Audio Unit plugins.
+
 Then in your Python program simply write
 
 ```python
