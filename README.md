@@ -10,13 +10,13 @@ PyAUNetReceive is a simple Python client that listens on a socket for output fro
 
 To connect to the output of an AUNetSend plugin, first start a program the uses Audio Unit plugins and then instantiate an AUNetSend plugin. Signed 16-bit PCM output is the only format currently supported. Specify a host and port (default host='127.0.0.1', port=52800) in the Audio Unit view.
 
-Apple's AU Lab is the simplest way to get started. You can find AU Lab with a quick search on [https://developer.apple.com/downloads/index.action](Apple's Developer site). For a quick start,
+Apple's AU Lab is the simplest way to get started. You can find AU Lab with a quick search on [Apple's Developer Site](https://developer.apple.com/downloads/index.action). For a quick start,
 
 1. Select Add Audio Unit Generator from the Edit menu. Select AUAudioFilePlayer, click OK, and use the dialog to find and play an audio file.
 
 2. Find the Effects section of the Output pane and select AUNetSend. Set the data format to '16 bit integer PCM' and the port to 52800.
 
-Other suggested programs are the excellent [http://www.rogueamoeba.com/audiohijack/](Audio Hijack) or Garage Band or really anything that works with Audio Unit plugins.
+Other suggested programs are the excellent [Audio Hijack](http://www.rogueamoeba.com/audiohijack/) or Garage Band or really anything that works with Audio Unit plugins.
 
 Then in your Python program simply write
 
