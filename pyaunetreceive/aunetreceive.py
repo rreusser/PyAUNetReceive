@@ -2,15 +2,15 @@ import socket, select, re
 
 class AUNetReceive:
 
-  NEEDSHAKE=0
-  NEEDMETA=1
-  WAITFORBEGIN=2
-  EXPECTSYNC=3
-  EXPECTDATA=4
+  STATE_NEEDSHAKE=0
+  STATE_NEEDMETA=1
+  STATE_WAITFORBEGIN=2
+  STATE_EXPECTSYNC=3
+  STATE_EXPECTDATA=4
 
   def __init__(s, host='localhost', port=52800):
     '''Initialize AUNetReceive and connect to the specified address'''
-    s.state = s.NEEDSHAKE
+    s.state = s.STATE_NEEDSHAKE
     s.data_queue = ''
     s.netrecv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.netrecv.connect((host,port))
@@ -40,19 +40,19 @@ class AUNetReceive:
       return False
 
     try:
-      if s.state == s.NEEDSHAKE:
+      if s.state == s.STATE_NEEDSHAKE:
         d = s._pop(16)
         s._shake(d)
-      elif s.state == s.NEEDMETA:
+      elif s.state == s.STATE_NEEDMETA:
         d = s._pop(40)
         s._parse_meta(d)
-      elif s.state == s.WAITFORBEGIN:
+      elif s.state == s.STATE_WAITFORBEGIN:
         d = s._pop(4)
         s._verify_begin(d)
-      elif s.state == s.EXPECTSYNC:
+      elif s.state == s.STATE_EXPECTSYNC:
         d = s._pop(4)
         s._sync(d)
-      elif s.state == s.EXPECTDATA:
+      elif s.state == s.STATE_EXPECTDATA:
         d = s._pop(1024)
         s._data(d)
 
@@ -68,32 +68,32 @@ class AUNetReceive:
     '''Perform handshake with the AUNetSend plugin instance'''
     if re.compile('^ausend').search(data) is not None:
       s.netrecv.send( 'aurecv'.ljust(40,'\0') )
-      s.state = s.NEEDMETA
+      s.state = s.STATE_NEEDMETA
     else:
       raise RuntimeError
 
   def _parse_meta(s,data):
     '''Parse metadata (simply drops the data since it's all PCM int16 data right now)'''
-    s.state = s.WAITFORBEGIN
+    s.state = s.STATE_WAITFORBEGIN
 
   def _verify_begin(s,data):
     '''Passed by AUNetSend before initiating stream'''
     if data == '\0\0\0\0':
-      s.state = s.EXPECTSYNC
+      s.state = s.STATE_EXPECTSYNC
     else:
       raise RuntimeError
 
   def _sync(s,data):
     '''Sent between 1024-byte data blocks'''
     if data == 'sync':
-      s.state = s.EXPECTDATA
+      s.state = s.STATE_EXPECTDATA
     else:
       raise RuntimeError
 
   def _data(s,data):
     '''Execute the callback on the data'''
     s.callback(data)
-    s.state = s.EXPECTSYNC
+    s.state = s.STATE_EXPECTSYNC
 
   # Discard data until we find a 'sync'
   def _recover(s):
