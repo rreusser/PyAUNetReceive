@@ -12,6 +12,14 @@ def summed_spec(l,r,window):
   return np.log(sumspec +1e-13) #* np.arange(len(sumspec))
 
 
+def peak_search( freq, amp, fmin, fmax ):
+  freq_filtered = np.where( (freq>fmin) & (freq<fmax) )
+  imax = freq_filtered[0][ np.argmax(amp[freq_filtered]) ]
+  fmax = freq[imax]
+  amax = amp[imax]
+  return (imax,fmax,amax)
+
+
 
 class AudioBuffer:
   '''Eats audio data and executes a callback when a specified amount of data is
@@ -31,7 +39,7 @@ class AudioBuffer:
 
 
 
-class BeatSpectrumAnalyzer:
+class BeatSpectrum:
   '''The basis for this algorithm is the paper "The Beat Spectrum: A New Approach to
   Rhythm Analysis" by Foote and Uchihashi. Their algorithm is:
 
@@ -70,10 +78,11 @@ class BeatSpectrumAnalyzer:
     s.spectrum_function = summed_spec
     
     # The number of running samples with which to compare the new sample
-    s.memory = 512
+    s.n = 512
 
     # This is the beat spectrum in which we accumulate the data!
-    s.beat_spectrum = np.zeros(s.memory)
+    s.beat_spectrum = np.zeros(s.n)
+    s.beat_spectrum_window = hamming_window(s.n)
 
     # The number of samples considered at a time in the audio input:
     s.window_width = 1024
@@ -91,9 +100,9 @@ class BeatSpectrumAnalyzer:
     # accumulate data into a running beat spectrum equivalent to diagonal sums of the
     # similarity matrix. Of course since we're not storing the whole thing, and since
     # it's a realtime algorithm, we'll have to do a decaying sort of sum.
-    s.diagonal_sums = np.zeros(s.memory)
+    s.diagonal_sums = np.zeros(s.n)
 
-    s.circular_buffer = np.zeros((s.memory,s.window_width//2+1))
+    s.circular_buffer = np.zeros((s.n,s.window_width//2+1))
     s.circular_buffer_position = 0
 
     # Audio sample rate:
@@ -106,7 +115,7 @@ class BeatSpectrumAnalyzer:
     s.window_dt = 1.0*s.window_width / s.sample_freq
 
     s.dt = 0.5*s.window_dt
-    s.df = 1.0 / (s.memory * s.dt)
+    s.df = 1.0 / (s.n * s.dt)
 
     # The window shifts by half of the window width due to the half-window overlap,
     # so the time constant accounts for this:
@@ -116,7 +125,7 @@ class BeatSpectrumAnalyzer:
     s.r_halfprev = None
 
     # Precalculate the matrices necessary for a linear fit:
-    s.A = np.vander(np.arange(s.memory),3)
+    s.A = np.vander(np.arange(s.n),3)
     s.At = np.linalg.pinv(s.A)
 
 
@@ -205,22 +214,81 @@ class BeatSpectrumAnalyzer:
     s.beat_spectrum *= s.decay_factor
     s.beat_spectrum += correlation
 
-    s.circular_buffer_position = (s.circular_buffer_position+1)%s.memory
+    s.circular_buffer_position = (s.circular_buffer_position+1)%s.n
 
+
+  def beat_cepstrum(s, n):
+    # Window the beat spectrum:
+    y = s.beat_spectrum * s.beat_spectrum_window
+
+    # Return the zero-padded fft:
+    return np.fft.rfft( y, n )
 
 
 class TempoDetector:
   def __init__(s):
-    s.beat_spectrum_analyzer = BeatSpectrumAnalyzer()
-    s.window = hamming_window(s.beat_spectrum_analyzer.memory)
+
+    # The tempo detector owns a beat spectrum with which it maintains a beat spectrum:
+    s.beat_spectrum = BeatSpectrum()
+
+    # Store a quick reference because I'm sick of typing beat_spectrum
+    s.bs = s.beat_spectrum
+
+    # The number of time-domain samples:
+    s.nt = s.bs.n
+
+    # A window for the beat spectrum:
+    s.window = hamming_window(s.nt)
+
+    # The factor by which to upsample the beat spectrum when taking the fft:
     s.upsample = 4
 
+    # The number of frequency-domain samples:
+    s.nf = (s.bs.n*s.upsample)//2+1
+
+    # Calculate the frequency increment for the fft'd beat spectrum
+    s.df = s.bs.df / s.upsample
+
+    # Calculate the frequency basis:
+    s.fbase = np.arange((s.bs.n*s.upsample)//2+1) * s.df
+    s.bpm = s.fbase * 60
+
+
+    # Arrays to store the points of interest:
+    s.freq_peaks = []
+    s.amp_peaks = []
+    
+
   def accumulate(s,l,r):
-    s.beat_spectrum_analyzer.accumulate(l,r)
+    s.bs.accumulate(l,r)
 
   def beat_cepstrum(s):
-    y = s.beat_spectrum_analyzer.beat_spectrum * s.window
-    return np.fft.rfft( y, len(y)*s.upsample )
+    return np.abs(s.bs.beat_cepstrum( s.bs.n * s.upsample ))
+
+  def peaks(s):
+    cep = s.beat_cepstrum()
+
+    # The cepstrum appears to have strong harmonics, so take the autocorrelation as a way
+    # to get at the periodicity of these harmonics... maybe.
+
+
+
+    if False:
+      bpm_max = np.max(s.bpm)
+
+      # This is ad hoc and not strictly 'correct' for the peak half-magnitude width, but
+      # the important thing is that it's useful and scales correctly.
+      peak_width = np.pi / s.bs.n / s.bs.window_dt * 60.0
+
+      # Find the peak in a nice range:
+      imax, fmax, amax = peak_search( s.bpm, cep, 150, 450 )
+
+      # Remove this peak from the spectrum:
+      cep *= 1.0 - np.exp( -(s.bpm - fmax)**2*0.5/peak_width**2 )
+
+      pl.plot(s.bpm, cep)
+      pl.show()
+
 
     
     
@@ -234,11 +302,12 @@ if __name__ == "__main__":
 
 
   tempo_detector = TempoDetector()
-  beat_spectrum_analyzer = tempo_detector.beat_spectrum_analyzer
+  beat_spectrum = tempo_detector.beat_spectrum
 
   pl.ion()
 
   plot_cepstrum = True
+  live_plots = True
   g = None
 
 
@@ -249,15 +318,15 @@ if __name__ == "__main__":
     l = lr[::2]
     r = lr[1::2]
     tempo_detector.accumulate(l,r)
-    if frame%2 == 0:
+    if frame%2 == 0 and live_plots:
       if plot_cepstrum:
         yh = (np.abs(tempo_detector.beat_cepstrum()))
-        xh = np.arange(len(yh)) * beat_spectrum_analyzer.df * 60 / tempo_detector.upsample
+        xh = tempo_detector.fbase * 60
         pl.xlabel('Beats per minute, bpm')
         pl.axis([0,1000,np.min(yh[1:]),np.max(yh[1:])])
       else:
-        yh = tempo_detector.beat_spectrum_analyzer.beat_spectrum[::-1]
-        xh = np.arange(len(yh)) * tempo_detector.beat_spectrum_analyzer.dt
+        yh = tempo_detector.beat_spectrum.beat_spectrum[::-1]
+        xh = np.arange(len(yh)) * tempo_detector.beat_spectrum.dt
         pl.xlabel('Time, t, seconds')
         pl.axis([0,np.max(xh),np.min(yh[1:]),np.max(yh[1:])])
       g = g or pl.plot(xh, np.arange(len(yh)))[0]
@@ -293,3 +362,10 @@ if __name__ == "__main__":
 
   except KeyboardInterrupt:
     pass
+    if False:
+      td = tempo_detector
+      bsa = tempo_detector.beat_spectrum
+      cep = tempo_detector.beat_cepstrum()
+      pl.plot(tempo_detector.fbase * 60, cep )
+      pl.axis([0,1000,0,np.max(cep)])
+      pl.show()
