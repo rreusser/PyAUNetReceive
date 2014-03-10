@@ -5,22 +5,16 @@ def hamming_window(n):
   return 0.54 - 0.46*np.cos(2.0*np.pi*np.arange(n)/(n-1.0))
 
 def absspectrum(y,window):
-  global debug
-  d = np.abs(np.fft.rfft(y*window))
-  #d -= np.mean(d)
-  return d
+  return np.abs(np.fft.rfft(y*window))
 
 def summed_spec(l,r,window):
-  global debug
   sumspec = absspectrum(l,window) + absspectrum(r,window)
   return np.log(sumspec +1e-13) #* np.arange(len(sumspec))
 
 
-debug = None
-
 
 class AudioBuffer:
-  '''Eats audio data and executes a callback when a certain amount of data is
+  '''Eats audio data and executes a callback when a specified amount of data is
   accumulated.'''
 
   def __init__(s, num_bytes=1024):
@@ -35,7 +29,9 @@ class AudioBuffer:
       s.buf = s.buf[s.bufsize:]
 
 
-class BeatDetector:
+
+
+class BeatSpectrumAnalyzer:
   '''The basis for this algorithm is the paper "The Beat Spectrum: A New Approach to
   Rhythm Analysis" by Foote and Uchihashi. Their algorithm is:
 
@@ -65,9 +61,7 @@ class BeatDetector:
 
                   alpha = log(0.5) / t_0
 
-  where t_0 is the half-life of the memory.
-  
-  OMG if this ever works it's gonna be a freakin miracle.'''
+  where t_0 is the half-life of the memory.'''
   def __init__(s):
     '''Initialize the beat detector. Screwing with the config is up to you.'''
 
@@ -111,6 +105,9 @@ class BeatDetector:
     # Width of a window of data, in seconds:
     s.window_dt = 1.0*s.window_width / s.sample_freq
 
+    s.dt = 0.5*s.window_dt
+    s.df = 1.0 / (s.memory * s.dt)
+
     # The window shifts by half of the window width due to the half-window overlap,
     # so the time constant accounts for this:
     s.decay_factor = np.exp( -np.log(2.0) * ( s.window_dt * 0.5 ) / s.halflife )
@@ -118,11 +115,15 @@ class BeatDetector:
     s.l_halfprev = None
     s.r_halfprev = None
 
-  def assimilate(s,l,r):
-    global debug
+    # Precalculate the matrices necessary for a linear fit:
+    s.A = np.vander(np.arange(s.memory),3)
+    s.At = np.linalg.pinv(s.A)
+
+
+  def accumulate(s,l,r):
     '''Assimilate new stereo input into the running beat spectrum. This function expects
     samples that are an integral multiple of the window width, and frankly it'd probably
-    be a really smart thing to do to just use a power of two. Srsly.'''
+    be a really smart thing to do to just use a power of two.'''
     if s.l_halfprev==None or s.r_halfprev==None:
       offset = 0
     else:
@@ -195,12 +196,34 @@ class BeatDetector:
     # the autocorrelation:
     correlation = np.roll( rolled_correlation, -s.circular_buffer_position-1 )
 
+    # The correlations are kind of all over the place, so subtract off a linear fit
+    coeff = np.dot(s.At,correlation)
+    fit = np.dot(s.A,coeff)
+    correlation -= fit
+
+    # Decay the existing spectrum and add the new:
     s.beat_spectrum *= s.decay_factor
     s.beat_spectrum += correlation
-    
+
     s.circular_buffer_position = (s.circular_buffer_position+1)%s.memory
 
 
+
+class TempoDetector:
+  def __init__(s):
+    s.beat_spectrum_analyzer = BeatSpectrumAnalyzer()
+    s.window = hamming_window(s.beat_spectrum_analyzer.memory)
+    s.upsample = 4
+
+  def accumulate(s,l,r):
+    s.beat_spectrum_analyzer.accumulate(l,r)
+
+  def beat_cepstrum(s):
+    y = s.beat_spectrum_analyzer.beat_spectrum * s.window
+    return np.fft.rfft( y, len(y)*s.upsample )
+
+    
+    
 
 
 
@@ -209,13 +232,14 @@ if __name__ == "__main__":
   from pyaunetreceive import AUNetReceive
   import matplotlib.pyplot as pl
 
-  debug = np.zeros(0)
 
-
-  beat_detector = BeatDetector()
+  tempo_detector = TempoDetector()
+  beat_spectrum_analyzer = tempo_detector.beat_spectrum_analyzer
 
   pl.ion()
-  g = pl.plot(np.arange(beat_detector.memory))[0]
+
+  plot_cepstrum = True
+  g = None
 
 
   frame = 0
@@ -224,11 +248,20 @@ if __name__ == "__main__":
     lr = np.fromstring(data,dtype=np.int16)/32768.0
     l = lr[::2]
     r = lr[1::2]
-    beat_detector.assimilate(l,r)
+    tempo_detector.accumulate(l,r)
     if frame%2 == 0:
-      y = beat_detector.beat_spectrum[::-1]
-      g.set_ydata(y)
-      pl.axis([0,beat_detector.memory,np.min(y),np.max(y)])
+      if plot_cepstrum:
+        yh = (np.abs(tempo_detector.beat_cepstrum()))
+        xh = np.arange(len(yh)) * beat_spectrum_analyzer.df * 60 / tempo_detector.upsample
+        pl.xlabel('Beats per minute, bpm')
+        pl.axis([0,1000,np.min(yh[1:]),np.max(yh[1:])])
+      else:
+        yh = tempo_detector.beat_spectrum_analyzer.beat_spectrum[::-1]
+        xh = np.arange(len(yh)) * tempo_detector.beat_spectrum_analyzer.dt
+        pl.xlabel('Time, t, seconds')
+        pl.axis([0,np.max(xh),np.min(yh[1:]),np.max(yh[1:])])
+      g = g or pl.plot(xh, np.arange(len(yh)))[0]
+      g.set_ydata( yh )
       pl.draw()
     frame += 1
 
@@ -259,7 +292,4 @@ if __name__ == "__main__":
       raise KeyboardInterrupt
 
   except KeyboardInterrupt:
-    if False:
-      pl.show()
-      b=beat_detector
-      pl.plot(b.beat_spectrum)
+    pass
