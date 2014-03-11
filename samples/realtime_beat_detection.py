@@ -4,21 +4,31 @@ import numpy as np
 def hamming_window(n):
   return 0.54 - 0.46*np.cos(2.0*np.pi*np.arange(n)/(n-1.0))
 
+def flattop_window(n):
+  x = np.arange(n)/(n-1.0)
+  return np.exp(-0.5*np.power((x-0.5)/0.44,16))
+
+
 def absspectrum(y,window):
   return np.abs(np.fft.rfft(y*window))
 
 def summed_spec(l,r,window):
   sumspec = absspectrum(l,window) + absspectrum(r,window)
-  return np.log(sumspec +1e-13) #* np.arange(len(sumspec))
+  return np.log(sumspec + 1e-13) #* np.arange(len(sumspec))
 
 
-def peak_search( freq, amp, fmin, fmax ):
+def peak_search_in_range( freq, amp, fmin, fmax ):
   freq_filtered = np.where( (freq>fmin) & (freq<fmax) )
   imax = freq_filtered[0][ np.argmax(amp[freq_filtered]) ]
   fmax = freq[imax]
   amax = amp[imax]
   return (imax,fmax,amax)
 
+def peak_search( freq, amp ):
+  imax = np.argmax(amp[freq])
+  fmax = freq[imax]
+  amax = amp[imax]
+  return (imax,fmax,amax)
 
 
 class AudioBuffer:
@@ -82,7 +92,7 @@ class BeatSpectrum:
 
     # This is the beat spectrum in which we accumulate the data!
     s.beat_spectrum = np.zeros(s.n)
-    s.beat_spectrum_window = hamming_window(s.n)
+    s.beat_spectrum_window = flattop_window(s.n)
 
     # The number of samples considered at a time in the audio input:
     s.window_width = 1024
@@ -217,12 +227,13 @@ class BeatSpectrum:
     s.circular_buffer_position = (s.circular_buffer_position+1)%s.n
 
 
-  def beat_cepstrum(s, n):
+  def beat_cepstrum(s):
     # Window the beat spectrum:
-    y = s.beat_spectrum * s.beat_spectrum_window
-
-    # Return the zero-padded fft:
-    return np.fft.rfft( y, n )
+    y = s.beat_spectrum
+    y *= flattop_window(len(y))
+    y_ac = np.abs(np.fft.rfft(np.correlate(y,y,mode='full')))
+    y_ac *= np.arange(len(y_ac))
+    return y_ac
 
 
 class TempoDetector:
@@ -263,7 +274,7 @@ class TempoDetector:
     s.bs.accumulate(l,r)
 
   def beat_cepstrum(s):
-    return np.abs(s.bs.beat_cepstrum( s.bs.n * s.upsample ))
+    return s.bs.beat_cepstrum()
 
   def peaks(s):
     cep = s.beat_cepstrum()
@@ -320,15 +331,21 @@ if __name__ == "__main__":
     tempo_detector.accumulate(l,r)
     if frame%2 == 0 and live_plots:
       if plot_cepstrum:
-        yh = (np.abs(tempo_detector.beat_cepstrum()))
-        xh = tempo_detector.fbase * 60
+        yh = tempo_detector.beat_cepstrum()
+        xh = np.arange(len(yh)) #tempo_detector.fbase * 60
         pl.xlabel('Beats per minute, bpm')
-        pl.axis([0,1000,np.min(yh[1:]),np.max(yh[1:])])
+        pl.axis([0,len(xh),np.min(yh[1:]),np.max(yh[1:])])
       else:
         yh = tempo_detector.beat_spectrum.beat_spectrum[::-1]
+        w = flattop_window(len(yh))
+        yh *= w
+        #yh *= np.arange(len(yh))/len(yh)
+        yh = (np.abs(np.fft.rfft(np.correlate(yh,yh,mode='full'))))
+        yh *= np.arange(len(yh))
         xh = np.arange(len(yh)) * tempo_detector.beat_spectrum.dt
         pl.xlabel('Time, t, seconds')
-        pl.axis([0,np.max(xh),np.min(yh[1:]),np.max(yh[1:])])
+        pl.axis([0,np.max(xh)*0.45,np.min(yh[1:]),np.max(yh[1:])])
+        #pl.axis([0,np.max(xh),0,15])
       g = g or pl.plot(xh, np.arange(len(yh)))[0]
       g.set_ydata( yh )
       pl.draw()
@@ -362,10 +379,10 @@ if __name__ == "__main__":
 
   except KeyboardInterrupt:
     pass
+    td = tempo_detector
+    bsa = tempo_detector.beat_spectrum
+    cep = tempo_detector.beat_cepstrum()
     if False:
-      td = tempo_detector
-      bsa = tempo_detector.beat_spectrum
-      cep = tempo_detector.beat_cepstrum()
       pl.plot(tempo_detector.fbase * 60, cep )
       pl.axis([0,1000,0,np.max(cep)])
       pl.show()
