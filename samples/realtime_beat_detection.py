@@ -6,7 +6,7 @@ def hamming_window(n):
 
 def flattop_window(n):
   x = np.arange(n)/(n-1.0)
-  return np.exp(-0.5*np.power((x-0.5)/0.44,16))
+  return np.exp(-0.5*np.power((x-0.5)/0.44,8))
 
 
 def absspectrum(y,window):
@@ -31,14 +31,256 @@ def peak_search( freq, amp ):
   return (imax,fmax,amax)
 
 
+class SignalMeta(object):
+  '''A class to store and manage signal metadata. It performs lazy evaluation and caching of most
+  things so that it's very efficient (beyond its use of getters/setters)'''
+  def __init__(s, n=None, dt=None, nf=None, df=None ):
+    '''Initialize from a vector and a time increment'''
+    # Take whatever is provided from the parameters:
+    s._n = n
+    s._nf = nf
+    s._dt = dt
+    s._df = df
+
+    # Initialize the rest:
+    s._window_function = hamming_window
+    s._window = None
+    s._fbase = None
+    s._tbase = None
+
+  @property
+  def fbase(s):
+    '''Lazy evaluation of the frequency basis'''
+    if s._fbase == None:
+      s._fbase = np.arange(s.nf) * s.df
+    return s._fbase
+
+  @property
+  def tbase(s):
+    '''Lazy evaluation of the time basis'''
+    if s._tbase == None:
+      s._tbase = np.arange(s._n) * s._dt
+    return s._tbase
+
+  @property
+  def window(s):
+    '''Lazy evaluation of the window function basis'''
+    if s._window == None:
+      s._window = s._window_function(s._n)
+    return s._window
+
+  @property
+  def n(s):
+    if s._n == None:
+      s._n = (s._nf-1)*2
+    return s._n
+
+  @n.setter
+  def n(s,value):
+    s._n = value
+    s._fbase = None
+    s._tbase = None
+    s._window = None
+    s._nf = None
+    s._df = None
+
+
+  @property
+  def nf(s):
+    if s._nf == None:
+      s._nf = s._n//2 + 1
+    return s._nf
+
+  @nf.setter
+  def nf(s,value):
+    s._nf = value
+    s._n = None
+    s._fbase = None
+    s._tbase = None
+    s._window = None
+
+
+
+  @property
+  def dt(s):
+    if s._dt == None:
+      s._dt = 1.0 / (s.n * s.df)
+    return s._dt
+
+  @dt.setter
+  def dt(s,value):
+    s._dt = value
+    s._fbase = None
+    s._tbase = None
+    s._df = None
+
+  @property
+  def df(s):
+    if s._df == None:
+      s._df = 1.0 / (s.n * s.dt)
+    return s._df
+
+  @df.setter
+  def df(s,value):
+    s._df = value
+    s._fbase = None
+    s._tbase = None
+    s._dt = None
+
+
+
+
+class Signal(SignalMeta):
+  def __init__(s, n=None, dt=None, nf=None, df=None ):
+    SignalMeta.__init__(s,n=n,dt=dt,nf=nf,df=df)
+    s._y = None
+    s._yf = None
+
+    # Plot references
+    s.tp = None
+    s.fp = None
+
+  @classmethod
+  def from_time_domain(cls, y=None, dt=None, n=None, nf=None, df=None):
+    s = Signal(dt=dt, n=n, nf=nf, df=df)
+    if y == None:
+      s._n = n
+      s._y = np.zeros(n,dtype='d')
+    else:
+      s.y = y
+    return s
+
+  @classmethod
+  def from_freq_domain(cls, yf=None, df=None, nf=None, n=None, dt=None):
+    s = Signal(df=df, nf=nf, n=n, dt=dt)
+    if yf == None:
+      s._nf = nf
+      s._yf = np.zeros(nf,dtype='complex128')
+    else:
+      s.yf = yf
+    return s
+
+  @property
+  def y_data(s):
+    return s._y
+
+  @y_data.setter
+  def y_data(s,values):
+    if s._y == None:
+      s._y = values
+    else:
+      s._y[:] = values
+    s._yf = None
+
+  def set_y_data(s, y):
+    if s._y == None:
+      s._y = y
+    else:
+      s._y[:] = y
+    s._yf = None
+
+  def set_yf_data(s,yf):
+    if s._yf == None:
+      s._yf = yf
+    else:
+      s._yf[:] = yf
+    s._y = None
+
+  @property
+  def yf_data(s):
+    return s._yf
+
+  @yf_data.setter
+  def yf_data(s,values):
+    if s._yf == None:
+      s._yf = values
+    else:
+      s._yf[:] = values
+    s._y = None
+
+  @property
+  def y(s):
+    if s._y == None:
+      s._y = np.fft.irfft(s._yf)
+    return s._y
+
+  @y.setter
+  def y(s,value):
+    s._y = value
+    s.n = len(s._y)
+    s._yf = None
+
+  @property
+  def yf(s):
+    if s._yf == None:
+      s._yf = np.fft.rfft(s._y)
+    return s._yf
+
+  @yf.setter
+  def yf(s,value):
+    s._yf = value
+    s.nf = len(s._yf)
+    s._y = None
+
+  def touch_y(s):
+    s._yf = None
+
+  def touch_yf(s):
+    s._y = None
+
+  def plot(s, live=False):
+    s.tplot(live)
+
+  def tplot(s, live=False):
+    if live:
+      pl.ion()
+    if s.tp==None:
+      s.tp = pl.plot(s.tbase, s.y)[0]
+    else:
+      s.tp.set_ydata( s.y )
+    pl.axis([np.min(s.tbase),np.max(s.tbase),np.min(s.y),np.max(s.y)])
+    if live:
+      pl.draw()
+    else:
+      pl.show()
+
+  def fplot(s, live=False):
+    if live:
+      pl.ion()
+    plotdata = np.abs(s.yf)
+    if s.fp==None:
+      s.fp = pl.plot(s.fbase, plotdata)[0]
+    else:
+      s.fp.set_ydata(np.abs(s.yf))
+    pl.axis([np.min(s.fbase),np.max(s.fbase),np.min(plotdata),np.max(plotdata)])
+    if live:
+      pl.draw()
+    else:
+      pl.show()
+
+  def tfplot(s, live=False):
+    if live:
+      pl.ion()
+    pl.subplot(2,1,1)
+    pl.plot(s.tbase, s.y)
+    pl.xlabel('Time, t, s')
+    pl.subplot(2,1,2)
+    pl.plot(s.fbase, np.abs(s.yf))
+    pl.xlabel('Frequency, f, Hz')
+    pl.show()
+
+
+
+
+
 class AudioBuffer:
   '''Eats audio data and executes a callback when a specified amount of data is
   accumulated.'''
 
-  def __init__(s, num_bytes=1024):
+  def __init__(s, num_bytes=1024, callback=lambda x: None):
     s.buf = ''
     s.bufsize = num_bytes
-    s.callback = lambda x: None
+    s.callback = callback
 
   def buffer(s,data):
     s.buf += data
@@ -49,7 +291,7 @@ class AudioBuffer:
 
 
 
-class BeatSpectrum:
+class BeatDetector:
   '''The basis for this algorithm is the paper "The Beat Spectrum: A New Approach to
   Rhythm Analysis" by Foote and Uchihashi. Their algorithm is:
 
@@ -83,28 +325,37 @@ class BeatSpectrum:
   def __init__(s):
     '''Initialize the beat detector. Screwing with the config is up to you.'''
 
-    # A reference to the function with which we compute the spectrum of each segment
-    # of data:
-    s.spectrum_function = summed_spec
-    
     # The number of running samples with which to compare the new sample
     s.n = 512
 
-    # This is the beat spectrum in which we accumulate the data!
-    s.beat_spectrum = np.zeros(s.n)
-    s.beat_spectrum_window = flattop_window(s.n)
 
+    # Parameters for the incoming data:
+
+    # Audio sample rate:
+    s.sample_freq = 44100
+    
     # The number of samples considered at a time in the audio input:
     s.window_width = 1024
 
-    # The number of samples expected in the audio input:
-    s.samples_per_input = 1024
+    # Just precompute this since we reference it a bunch:
+    s.window_halfwidth = s.window_width//2
 
     # Precalculate a window function for the fft:
     s.window = hamming_window(s.window_width)
 
-    # Just precompute this since we reference it a bunch:
-    s.window_halfwidth = s.window_width//2
+    # Width of a window of data, in seconds:
+    s.window_dt = 1.0*s.window_width / s.sample_freq
+
+    s.spectrum = Signal.from_time_domain(n=s.n, dt=s.window_dt)
+    s.cepstrum = Signal.from_time_domain(n=s.n*2, dt=s.window_dt)
+
+    print len(s.spectrum.y)
+
+    s.beat_spectrum_window = flattop_window(s.spectrum.n)
+
+    # A reference to the function with which we compute the spectrum of each segment
+    # of data:
+    s.spectrum_function = summed_spec
 
     # There's really no sense storing a full similarity matrix. Instead, let's just
     # accumulate data into a running beat spectrum equivalent to diagonal sums of the
@@ -115,17 +366,8 @@ class BeatSpectrum:
     s.circular_buffer = np.zeros((s.n,s.window_width//2+1))
     s.circular_buffer_position = 0
 
-    # Audio sample rate:
-    s.sample_freq = 44100
-
     # Characteristic decay time of the beat spectrum:
     s.halflife = 2.5
-
-    # Width of a window of data, in seconds:
-    s.window_dt = 1.0*s.window_width / s.sample_freq
-
-    s.dt = 0.5*s.window_dt
-    s.df = 1.0 / (s.n * s.dt)
 
     # The window shifts by half of the window width due to the half-window overlap,
     # so the time constant accounts for this:
@@ -148,13 +390,15 @@ class BeatSpectrum:
     else:
       offset = -s.window_halfwidth
 
+    samples = len(l)
+
     # Let's not hard-code the window width so that you'd be able to split up the samples
     # into smaller chunks in case the audio input has too many samples at a time and
     # splitting it by just a factor of two results in segments that are too long.
     #
     # So shift the offset, starting with a window that has half old samples and half
     # new samples:
-    while offset + s.window_width <= s.samples_per_input:
+    while offset + s.window_width <= samples:
 
       if offset < 0:
         # In this case, it's split between old samples and new samples, so we'll grab
@@ -213,7 +457,7 @@ class BeatSpectrum:
     # The correlation has an offset determined by the cirular buffer's current position,
     # so we'll roll the array so that the first element of the correlations is always
     # the autocorrelation:
-    correlation = np.roll( rolled_correlation, -s.circular_buffer_position-1 )
+    correlation = np.roll( rolled_correlation[::-1], s.circular_buffer_position+1 )
 
     # The correlations are kind of all over the place, so subtract off a linear fit
     coeff = np.dot(s.At,correlation)
@@ -221,49 +465,25 @@ class BeatSpectrum:
     correlation -= fit
 
     # Decay the existing spectrum and add the new:
-    s.beat_spectrum *= s.decay_factor
-    s.beat_spectrum += correlation
+    s.spectrum._y *= s.decay_factor
+    s.spectrum._y += correlation
+    s.spectrum.touch_y()
 
     s.circular_buffer_position = (s.circular_buffer_position+1)%s.n
 
 
-  def beat_cepstrum(s):
-    # Window the beat spectrum:
-    y = s.beat_spectrum
-    y *= flattop_window(len(y))
-    y_ac = np.abs(np.fft.rfft(np.correlate(y,y,mode='full')))
-    y_ac *= np.arange(len(y_ac))
-    return y_ac
+  def update_cepstrum(s):
+    # Return the frequency-domain autocorrelation of the beat spectrum:
+    n = s.spectrum.n*2
+    yh = np.fft.rfft(s.spectrum.y * s.beat_spectrum_window,n) * np.arange(n//2+1)
+    s.cepstrum.set_yf_data( np.abs( yh * np.conj(yh) ) )
 
 
 class TempoDetector:
   def __init__(s):
 
     # The tempo detector owns a beat spectrum with which it maintains a beat spectrum:
-    s.beat_spectrum = BeatSpectrum()
-
-    # Store a quick reference because I'm sick of typing beat_spectrum
-    s.bs = s.beat_spectrum
-
-    # The number of time-domain samples:
-    s.nt = s.bs.n
-
-    # A window for the beat spectrum:
-    s.window = hamming_window(s.nt)
-
-    # The factor by which to upsample the beat spectrum when taking the fft:
-    s.upsample = 4
-
-    # The number of frequency-domain samples:
-    s.nf = (s.bs.n*s.upsample)//2+1
-
-    # Calculate the frequency increment for the fft'd beat spectrum
-    s.df = s.bs.df / s.upsample
-
-    # Calculate the frequency basis:
-    s.fbase = np.arange((s.bs.n*s.upsample)//2+1) * s.df
-    s.bpm = s.fbase * 60
-
+    s.beats = BeatDetector()
 
     # Arrays to store the points of interest:
     s.freq_peaks = []
@@ -271,37 +491,9 @@ class TempoDetector:
     
 
   def accumulate(s,l,r):
-    s.bs.accumulate(l,r)
+    s.beats.accumulate(l,r)
+    s.beats.update_cepstrum()
 
-  def beat_cepstrum(s):
-    return s.bs.beat_cepstrum()
-
-  def peaks(s):
-    cep = s.beat_cepstrum()
-
-    # The cepstrum appears to have strong harmonics, so take the autocorrelation as a way
-    # to get at the periodicity of these harmonics... maybe.
-
-
-
-    if False:
-      bpm_max = np.max(s.bpm)
-
-      # This is ad hoc and not strictly 'correct' for the peak half-magnitude width, but
-      # the important thing is that it's useful and scales correctly.
-      peak_width = np.pi / s.bs.n / s.bs.window_dt * 60.0
-
-      # Find the peak in a nice range:
-      imax, fmax, amax = peak_search( s.bpm, cep, 150, 450 )
-
-      # Remove this peak from the spectrum:
-      cep *= 1.0 - np.exp( -(s.bpm - fmax)**2*0.5/peak_width**2 )
-
-      pl.plot(s.bpm, cep)
-      pl.show()
-
-
-    
     
 
 
@@ -311,55 +503,27 @@ if __name__ == "__main__":
   from pyaunetreceive import AUNetReceive
   import matplotlib.pyplot as pl
 
-
   tempo_detector = TempoDetector()
-  beat_spectrum = tempo_detector.beat_spectrum
-
-  pl.ion()
-
-  plot_cepstrum = True
-  live_plots = True
-  g = None
-
+  beats = tempo_detector.beats
 
   frame = 0
   def process_buffered_data(data):
-    global g, frame
+    global tempo_detector, beats, frame
     lr = np.fromstring(data,dtype=np.int16)/32768.0
     l = lr[::2]
     r = lr[1::2]
     tempo_detector.accumulate(l,r)
-    if frame%2 == 0 and live_plots:
-      if plot_cepstrum:
-        yh = tempo_detector.beat_cepstrum()
-        xh = np.arange(len(yh)) #tempo_detector.fbase * 60
-        pl.xlabel('Beats per minute, bpm')
-        pl.axis([0,len(xh),np.min(yh[1:]),np.max(yh[1:])])
-      else:
-        yh = tempo_detector.beat_spectrum.beat_spectrum[::-1]
-        w = flattop_window(len(yh))
-        yh *= w
-        #yh *= np.arange(len(yh))/len(yh)
-        yh = (np.abs(np.fft.rfft(np.correlate(yh,yh,mode='full'))))
-        yh *= np.arange(len(yh))
-        xh = np.arange(len(yh)) * tempo_detector.beat_spectrum.dt
-        pl.xlabel('Time, t, seconds')
-        pl.axis([0,np.max(xh)*0.45,np.min(yh[1:]),np.max(yh[1:])])
-        #pl.axis([0,np.max(xh),0,15])
-      g = g or pl.plot(xh, np.arange(len(yh)))[0]
-      g.set_ydata( yh )
-      pl.draw()
-    frame += 1
+    if frame%4==0:
+      beats.cepstrum.fplot(live=True)
+    frame+=1
 
 
-  audiobuffer = AudioBuffer(4096)
-  audiobuffer.callback = process_buffered_data
+  audiobuffer = AudioBuffer(4096, process_buffered_data)
 
 
   def process_audio_data(data):
     global audiobuffer
     audiobuffer.buffer(data)
-
 
 
 
@@ -379,10 +543,3 @@ if __name__ == "__main__":
 
   except KeyboardInterrupt:
     pass
-    td = tempo_detector
-    bsa = tempo_detector.beat_spectrum
-    cep = tempo_detector.beat_cepstrum()
-    if False:
-      pl.plot(tempo_detector.fbase * 60, cep )
-      pl.axis([0,1000,0,np.max(cep)])
-      pl.show()
