@@ -6,15 +6,17 @@ def hamming_window(n):
 
 def flattop_window(n):
   x = np.arange(n)/(n-1.0)
-  return np.exp(-0.5*np.power((x-0.5)/0.44,8))
+  return np.exp(-0.5*np.power((x-0.5)/0.4,8))
 
 
 def absspectrum(y,window):
-  return np.abs(np.fft.rfft(y*window))
+  y = np.abs(np.fft.rfft(y*window)) * np.arange(len(y)//2+1)
+  #y[:10] *= 0
+  return y
 
 def summed_spec(l,r,window):
   sumspec = absspectrum(l,window) + absspectrum(r,window)
-  return np.log(sumspec + 1e-13) #* np.arange(len(sumspec))
+  return (sumspec + 1e-13) #* np.arange(len(sumspec))
 
 
 def peak_search_in_range( freq, amp, fmin, fmax ):
@@ -231,44 +233,62 @@ class Signal(SignalMeta):
   def plot(s, live=False):
     s.tplot(live)
 
-  def tplot(s, live=False):
+  def tplot(s, live=False, show=False):
     if live:
       pl.ion()
-    if s.tp==None:
+    if s.tp==None or not live:
       s.tp = pl.plot(s.tbase, s.y)[0]
     else:
       s.tp.set_ydata( s.y )
     pl.axis([np.min(s.tbase),np.max(s.tbase),np.min(s.y),np.max(s.y)])
     if live:
       pl.draw()
-    else:
+    elif show:
       pl.show()
 
-  def fplot(s, live=False):
+  def fplot(s, live=False, show=False):
     if live:
       pl.ion()
     plotdata = np.abs(s.yf)
-    if s.fp==None:
+    if s.fp==None or not live:
       s.fp = pl.plot(s.fbase, plotdata)[0]
     else:
       s.fp.set_ydata(np.abs(s.yf))
     pl.axis([np.min(s.fbase),np.max(s.fbase),np.min(plotdata),np.max(plotdata)])
     if live:
       pl.draw()
-    else:
+    elif show:
       pl.show()
 
-  def tfplot(s, live=False):
+  def tfplot(s, live=False, tmax=None, fmax=None, show=False):
     if live:
       pl.ion()
     pl.subplot(2,1,1)
-    pl.plot(s.tbase, s.y)
+
+    if s.tp==None:
+      s.tp = pl.plot(s.tbase, s.y)[0]
+    else:
+      s.tp.set_ydata( s.y )
+    pl.axis([np.min(s.tbase),tmax or np.max(s.tbase),np.min(s.y),np.max(s.y)])
+
+
     pl.xlabel('Time, t, s')
     pl.subplot(2,1,2)
-    pl.plot(s.fbase, np.abs(s.yf))
-    pl.xlabel('Frequency, f, Hz')
-    pl.show()
 
+    plotdata = np.abs(s.yf)
+    if s.fp==None or not live:
+      s.fp = pl.plot(s.fbase, plotdata)[0]
+    else:
+      s.fp.set_ydata(np.abs(s.yf))
+    pl.axis([np.min(s.fbase),fmax or np.max(s.fbase),np.min(plotdata),np.max(plotdata)])
+
+
+    pl.xlabel('Frequency, f, Hz')
+
+    if live:
+      pl.draw()
+    elif show:
+      pl.show()
 
 
 
@@ -326,7 +346,7 @@ class BeatDetector:
     '''Initialize the beat detector. Screwing with the config is up to you.'''
 
     # The number of running samples with which to compare the new sample
-    s.n = 512
+    s.n = 256
 
 
     # Parameters for the incoming data:
@@ -347,9 +367,7 @@ class BeatDetector:
     s.window_dt = 1.0*s.window_width / s.sample_freq
 
     s.spectrum = Signal.from_time_domain(n=s.n, dt=s.window_dt)
-    s.cepstrum = Signal.from_time_domain(n=s.n*2, dt=s.window_dt)
-
-    print len(s.spectrum.y)
+    s.cepstrum = Signal.from_time_domain(n=s.n*8, dt=s.window_dt)
 
     s.beat_spectrum_window = flattop_window(s.spectrum.n)
 
@@ -367,7 +385,7 @@ class BeatDetector:
     s.circular_buffer_position = 0
 
     # Characteristic decay time of the beat spectrum:
-    s.halflife = 2.5
+    s.halflife = 0.5
 
     # The window shifts by half of the window width due to the half-window overlap,
     # so the time constant accounts for this:
@@ -380,6 +398,9 @@ class BeatDetector:
     s.A = np.vander(np.arange(s.n),3)
     s.At = np.linalg.pinv(s.A)
 
+    # Time-average the cepstrum to suppress fluctuations
+    s.time_averaged_cepstrum = Signal.from_time_domain(n=s.cepstrum.n, dt=s.window_dt)
+    s.time_averaged_cepstrum.yf
 
   def accumulate(s,l,r):
     '''Assimilate new stereo input into the running beat spectrum. This function expects
@@ -474,9 +495,33 @@ class BeatDetector:
 
   def update_cepstrum(s):
     # Return the frequency-domain autocorrelation of the beat spectrum:
-    n = s.spectrum.n*2
-    yh = np.fft.rfft(s.spectrum.y * s.beat_spectrum_window,n) * np.arange(n//2+1)
+    yh = np.fft.rfft(s.spectrum.y * s.beat_spectrum_window,s.cepstrum.n) * np.arange(s.cepstrum.n//2+1,dtype='d') / s.cepstrum.n
     s.cepstrum.set_yf_data( np.abs( yh * np.conj(yh) ) )
+
+    s.time_averaged_cepstrum._yf *= s.decay_factor
+    s.time_averaged_cepstrum._yf += s.cepstrum._yf
+    s.time_averaged_cepstrum.touch_yf()
+
+
+
+
+  def maxima(s,cutoff=None):
+
+    # Apply the cutoff frequency:
+    icutoff = int(cutoff / s.time_averaged_cepstrum.df) if cutoff else len(s.time_averaged_cepstrum.yf)
+
+    # Locate maxima:
+    imax = (np.diff(np.sign(np.diff(s.time_averaged_cepstrum._yf[:icutoff]))) < 0).nonzero()[0] + 1
+
+    # Evaluate frequency and amplitudes at the maxima:
+    fmax = s.time_averaged_cepstrum.fbase[imax]
+    amax = s.time_averaged_cepstrum.yf[imax]
+    
+    # Sort by amplitude descending:
+    o = np.argsort(amax**2)[::-1]
+
+    return (imax[o], fmax[o], amax[o])
+    
 
 
 class TempoDetector:
@@ -488,11 +533,28 @@ class TempoDetector:
     # Arrays to store the points of interest:
     s.freq_peaks = []
     s.amp_peaks = []
+
+    s.halflife = 0.05
+    s.decay_factor = np.exp( -np.log(2.0) * ( s.beats.window_dt * 0.5 ) / s.halflife )
+
+    s.bpm = 0
     
 
   def accumulate(s,l,r):
     s.beats.accumulate(l,r)
     s.beats.update_cepstrum()
+
+    s.track_bpm()
+
+
+  def track_bpm(s):
+    m = s.beats.maxima()
+    bpm = m[1][0]*60
+
+    s.bpm *= s.decay_factor
+    s.bpm += (1.0-s.decay_factor)*bpm
+
+    print round(s.bpm,1)
 
     
 
@@ -506,15 +568,26 @@ if __name__ == "__main__":
   tempo_detector = TempoDetector()
   beats = tempo_detector.beats
 
+
+  pl.ion()
+  g = pl.plot([],'.')[0]
+
   frame = 0
   def process_buffered_data(data):
-    global tempo_detector, beats, frame
+    global tempo_detector, beats, frame, g
     lr = np.fromstring(data,dtype=np.int16)/32768.0
     l = lr[::2]
     r = lr[1::2]
     tempo_detector.accumulate(l,r)
+
+    # Plot:
     if frame%4==0:
-      beats.cepstrum.fplot(live=True)
+
+      beats.time_averaged_cepstrum.tfplot(live=True, tmax=10)
+      #beats.cepstrum.tfplot(live=True, tmax=10)
+      #beats.spectrum.tplot(live=True)
+      pass
+
     frame+=1
 
 
@@ -542,4 +615,8 @@ if __name__ == "__main__":
       raise KeyboardInterrupt
 
   except KeyboardInterrupt:
-    pass
+
+    beats.cepstrum.tfplot(tmax=10, fmax=20)
+    (imax, fmax, amax) = beats.maxima(10)
+    pl.plot( beats.cepstrum.fbase[imax[:5]], beats.cepstrum.yf[imax[:5]], '.')
+    pl.show()
